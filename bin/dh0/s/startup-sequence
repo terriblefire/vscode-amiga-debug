@@ -1,2 +1,3 @@
+stack 98304
 cd dh1:
-:a.exe
+:main_sym.exe

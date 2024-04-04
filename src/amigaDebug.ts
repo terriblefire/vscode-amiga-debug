@@ -161,10 +161,10 @@ export class AmigaDebugSession extends LoggingDebugSession {
 			logger.setup(Logger.LogLevel.Verbose, false);
 
 		const binPath: string = await vscode.commands.executeCommand("amiga.bin-path");
-		const objdumpPath = path.join(binPath, "opt/bin/m68k-amiga-elf-objdump");
+		const objdumpPath = "opt/amiga/bin/m68k-amigaos-objdump";
 		const dh0Path = path.join(binPath, "..", "dh0");
 
-		const gdbPath = path.join(binPath, "opt/bin/m68k-amiga-elf-gdb");
+		const gdbPath = "opt/amiga/bin/m68k-amigaos-gdb";
 		const gdbArgs = ['-q', '--interpreter=mi2', '-l', '10'];
 
 		const parseCfg = (str: string) => {
@@ -193,7 +193,7 @@ export class AmigaDebugSession extends LoggingDebugSession {
 		let config = new Map<string, string>();
 
 		const exePath = path.dirname(args.program);
-		const exeName = path.basename(args.program) + ".exe";
+		const exeName = path.basename(args.program) + "_sym.exe";
 		const debugTrigger = args.endcli ? exeName : ':' + exeName;
 		const machine = args.config?.toLowerCase();
 
@@ -495,8 +495,8 @@ export class AmigaDebugSession extends LoggingDebugSession {
 		if(args.uaelog === undefined)
 			args.uaelog = true;
 
-		if (!fs.existsSync(args.program + ".elf")) {
-			this.sendErrorResponse(response, 103, `Unable to find executable file at ${args.program}.elf.`);
+		if (!fs.existsSync(args.program + "_sym.exe")) {
+			this.sendErrorResponse(response, 103, `Unable to find executable file at ${args.program}_sym.exe.`);
 			return;
 		}
 
@@ -506,7 +506,7 @@ export class AmigaDebugSession extends LoggingDebugSession {
 		}
 
 		this.args = args;
-		this.symbolTable = new SymbolTable(objdumpPath, args.program + ".elf");
+		this.symbolTable = new SymbolTable(objdumpPath, args.program + "_sym.exe");
 		this.breakpointMap = new Map();
 		this.fileExistsCache = new Map();
 
@@ -594,7 +594,7 @@ export class AmigaDebugSession extends LoggingDebugSession {
 		});
 		const commands = [
 			'enable-pretty-printing',
-			//'interpreter-exec console "set debug remote 1"',
+			'interpreter-exec console "set debug remote 1"',
 			'interpreter-exec console "target remote localhost:2345"',
 		];
 
@@ -609,7 +609,7 @@ export class AmigaDebugSession extends LoggingDebugSession {
 		}
 
 		// launch GDB and connect to WinUAE
-		await this.miDebugger.connect(".", this.args.program + ".elf", commands).catch((err: Error) => {
+		await this.miDebugger.connect(".", this.args.program + "_sym.exe", commands).catch((err: Error) => {
 			this.sendErrorResponse(response, 103, `Failed to launch GDB: ${err.toString()}`);
 		});
 
@@ -858,8 +858,8 @@ export class AmigaDebugSession extends LoggingDebugSession {
 				const numFrames = args?.numFrames || 1;
 
 				const binPath: string = await vscode.commands.executeCommand("amiga.bin-path");
-				const addr2linePath = path.join(binPath, "opt/bin/m68k-amiga-elf-addr2line");
-				const objdumpPath = path.join(binPath, "opt/bin/m68k-amiga-elf-objdump");
+				const addr2linePath = path.join(binPath, "opt/amiga/bin/m68k-amigaos-addr2line");
+				const objdumpPath = path.join(binPath, "opt/amiga/bin/m68k-amigaos-objdump");
 
 				const date = new Date();
 				const dateString = date.getFullYear().toString() + "." + (date.getMonth()+1).toString().padStart(2, '0') + "." + date.getDate().toString().padStart(2, '0') + "-" +
@@ -867,7 +867,7 @@ export class AmigaDebugSession extends LoggingDebugSession {
 				const tmp = path.join(os.tmpdir(), `amiga-profile-${dateString}`);
 
 				// write unwind table for WinUAE
-				const unwind = new UnwindTable(objdumpPath, this.args.program + ".elf", this.symbolTable);
+				const unwind = new UnwindTable(objdumpPath, this.args.program + "_sym.exe", this.symbolTable);
 				fs.writeFileSync(tmp + ".unwind", unwind.unwind);
 
 				progress.report({ message: 'Starting profile...'});
@@ -906,11 +906,11 @@ export class AmigaDebugSession extends LoggingDebugSession {
 					kickSymTable = new SymbolTable(objdumpPath, kickSymPath);
 					kickSymTable.relocate([ { name: '.kick', address: kickBase, size: profileFile.kickRomSize } ]);
 				}
-				const sourceMap = new SourceMap(addr2linePath, this.args.program + ".elf", this.symbolTable);
+				const sourceMap = new SourceMap(addr2linePath, this.args.program + "_sym.exe", this.symbolTable);
 				const profiler = new Profiler(sourceMap, this.symbolTable, kickSymTable);
 
 				progress.report({ message: 'Writing profile...'});
-				const disasm = Disassemble(objdumpPath, this.args.program + ".elf");
+				const disasm = Disassemble(objdumpPath, this.args.program + "_sym.exe");
 				if(numFrames > 1) {
 					await profiler.profileTimeSplit(tmp, profileFile, disasm, (curFrame: number, numFrames: number) => {
 						progress.report({ increment: 50 / numFrames, message: `Writing frame ${curFrame + 1} of ${numFrames}`});

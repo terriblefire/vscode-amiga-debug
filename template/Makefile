@@ -1,78 +1,120 @@
-# to generate assembler listing with LTO, add to LDFLAGS: -Wa,-adhln=$@.listing,--listing-rhs-width=200
-# for better annotations add -dA -dP
-# to generate assembler source with LTO, add to LDFLAGS: -save-temps=cwd
+SHELL=bash
+#SHELL=bash -x
+#.SILENT:
+.PHONY: all clean bumprev test astyle
 
-ifdef OS
-	WINDOWS = 1
-	SHELL = cmd.exe
-endif
+OUTDIR=build
 
-subdirs := $(wildcard */)
-VPATH = $(subdirs)
-cpp_sources := $(wildcard *.cpp) $(wildcard $(addsuffix *.cpp,$(subdirs)))
-cpp_objects := $(addprefix obj/,$(patsubst %.cpp,%.o,$(notdir $(cpp_sources))))
-c_sources := $(wildcard *.c) $(wildcard $(addsuffix *.c,$(subdirs)))
-c_objects := $(addprefix obj/,$(patsubst %.c,%.o,$(notdir $(c_sources))))
-s_sources := support/gcc8_a_support.s support/depacker_doynax.s
-s_objects := $(addprefix obj/,$(patsubst %.s,%.o,$(notdir $(s_sources))))
-vasm_sources := $(wildcard *.asm) $(wildcard $(addsuffix *.asm, $(subdirs)))
-vasm_objects := $(addprefix obj/, $(patsubst %.asm,%.o,$(notdir $(vasm_sources))))
-objects := $(cpp_objects) $(c_objects) $(s_objects) $(vasm_objects)
+CC=m68k-amigaos-gcc
+AS=vasmm68k_mot
+STRIP=m68k-amigaos-strip
+SIZE=m68k-amigaos-size
+CFLAGS=-g -O0 -mregparm=4 -fomit-frame-pointer -Wall -Werror -m68020-60 # -save-temps
+ASFLAGS=-m68020up -Fhunk -kick1hunks -linedebug -opt-fconst -nowarn=62 -quiet
+LDFLAGS=-noixemul
 
-# https://stackoverflow.com/questions/4036191/sources-from-subdirectories-in-makefile/4038459
-# http://www.microhowto.info/howto/automatically_generate_makefile_dependencies.html
+GIT_HEADER:=$(OUTDIR)/git.h
 
-program = out/a
-OUT = $(program)
-CC = m68k-amiga-elf-gcc
-AS = m68k-amiga-elf-as
-VASM = vasmm68k_mot
+SRCS=$(wildcard src/*.c) $(wildcard src/*.s)
+TARGET=$(OUTDIR)/main.exe
 
-ifdef WINDOWS
-	SDKDIR = $(abspath $(dir $(shell where $(CC)))..\m68k-amiga-elf\sys-include)
-else
-	SDKDIR = $(abspath $(dir $(shell which $(CC)))../m68k-amiga-elf/sys-include)
-endif
+all: $(TARGET)
 
-CCFLAGS   = -g -MP -MMD -m68000 -Ofast -nostdlib -Wextra -Wno-unused-function -Wno-volatile-register-var -fomit-frame-pointer -fno-tree-loop-distribution -flto -fwhole-program -fno-exceptions -ffunction-sections -fdata-sections
-CPPFLAGS  = $(CCFLAGS) -fno-rtti -fcoroutines -fno-use-cxa-atexit
-ASFLAGS   = -mcpu=68000 -g --register-prefix-optional -I$(SDKDIR)
-LDFLAGS   = -Wl,--emit-relocs,--gc-sections,-Ttext=0,-Map=$(OUT).map
-VASMFLAGS = -m68000 -Felf -opt-fconst -nowarn=62 -dwarf=3 -quiet -x -I. -I$(SDKDIR)
+ALL_TOOLS = $(CC) $(AS) $(STRIP) $(SIZE)
+ALL_OK := $(foreach tool,$(ALL_TOOLS), $(if $(shell which $(tool)),,$(error "No '$(tool)' in PATH")))
 
-all: $(OUT).exe
+##
+## Feed build time and date via defines rather than using __DATE__ / __TIME__
+##
 
-$(OUT).exe: $(OUT).elf
-	$(info Elf2Hunk $(program).exe)
-	@elf2hunk $(OUT).elf $(OUT).exe
+VER_DATE:="$(shell date +%d.%-m.%y)"
+VER_TIME:="$(shell date "+%d %b %Y / %T")"
+VER_YEAR:="$(shell date +%Y)"
 
-$(OUT).elf: $(objects)
-	$(info Linking $(program).elf)
-	@$(CC) $(CCFLAGS) $(LDFLAGS) $(objects) -o $@
-	@m68k-amiga-elf-objdump --disassemble --no-show-raw-ins --visualize-jumps -S $@ >$(OUT).s
+##
+## Build VERSION & REVISION. Use the 'bumprev' target to increase the revision number
+##
+
+#$(info $(shell [[ ! -e VERSION ]] && echo 1 > VERSION))
+#$(info $(shell [[ ! -e REVISION ]] && echo 1 > REVISION))
+VERSION :=$(shell cat VERSION)
+REVISION:=$(shell cat REVISION)
+
+$(info VERSION     = $(VERSION).$(REVISION))
+
+##
+
+CFLAGS+=-I$(OUTDIR)
+CFLAGS+=-MMD
+CFLAGS+=-DVERSION=$(VERSION)
+CFLAGS+=-DREVISION=$(REVISION)
+CFLAGS+=-DVER_DATE=$(VER_DATE)
+CFLAGS+=-DVER_TIME=$(VER_TIME)
+CFLAGS+=-DVER_YEAR=$(VER_YEAR)
+CFLAGS+=-DTARGET=$(TARGET)
+
+GCC_ROOT:=$(abspath $(addsuffix ..,$(dir $(shell which m68k-amigaos-gcc))))
+ASFLAGS+=-I$(GCC_ROOT)/m68k-amigaos/ndk-include
+
+OBJS=$(addprefix $(OUTDIR)/,$(filter %.o,$(SRCS:.c=.o)))
+OBJS+=$(addprefix $(OUTDIR)/,$(filter %.o,$(SRCS:.s=.o)))
+DEPS=$(OBJS:.o=.d)
+
+##
+# Generate debug info, but strip it from the final output
+CFLAGS+=-g
+LDFLAGS+=-g -Wl,-Map,$(basename $(TARGET))_map.txt
+TARGET_DEBUG=$(basename $(TARGET))_sym$(suffix $(TARGET))
+
+##
+# Create output dirs
+$(shell mkdir -p $(OUTDIR) $(dir $(OBJS)) > /dev/null)
+
+##
+## Generate a C header file with a macro defining the current git hash (incl dirty state)
+##
+
+GIT :=$(shell git describe --always --dirty)
+GIT_HEADER?=git.h
+GIT_DEFINE:='\#define GIT $(GIT)'
+OLD_DEFINE:='$(shell [[ -e $(GIT_HEADER) ]] && cat $(GIT_HEADER) || echo "nothing")'
+$(info GIT         = $(GIT))
+#$(info GIT_DEFINE  = $(GIT_DEFINE))
+#$(info OLD_DEFINE  = $(OLD_DEFINE))
+$(info $(shell [[ $(OLD_DEFINE) != $(GIT_DEFINE) ]] && echo $(GIT_DEFINE) > $(GIT_HEADER)))
+
+##
 
 clean:
-	$(info Cleaning...)
-ifdef WINDOWS
-	@del /q obj\* out\*
-else
-	@$(RM) obj/* out/*
-endif
+	rm -rf $(TARGET) $(OBJS) $(DEPS) $(GIT_HEADER) $(OUTDIR)
 
--include $(objects:.o=.d)
+bumprev:
+	echo $$(( $(REVISION) + 1 )) > REVISION
 
-$(cpp_objects) : obj/%.o : %.cpp
-	$(info Compiling $<)
-	@$(CC) $(CPPFLAGS) -c -o $@ $(CURDIR)/$<
+test: $(TARGET)
+	@hash vamos 2>/dev/null && vamos -q $< || echo "amitools/vamos not installed"
 
-$(c_objects) : obj/%.o : %.c
-	$(info Compiling $<)
-	@$(CC) $(CCFLAGS) -c -o $@ $(CURDIR)/$<
+astyle:
+	astyle --formatted --style=bsd --suffix=none --indent=spaces --indent-switches --keep-one-line-blocks --pad-comma --keep-one-line-statements --min-conditional-indent=0 --align-pointer=type --indent-preprocessor --pad-oper --pad-header --break-blocks --recursive  src/*.c,*.h
 
-$(s_objects): obj/%.o : %.s
-	$(info Assembling $<)
-	@$(AS) $(ASFLAGS) --MD $(@D)/$*.d -o $@ $(CURDIR)/$<
+##
 
-$(vasm_objects): obj/%.o : %.asm
-	$(info Assembling $<)
-	@$(VASM) $(VASMFLAGS) -o $@ $(CURDIR)/$<
+# All objects depend on Makefile changes (to pick up CFLAGS changes etc)
+$(OBJS) : $(MAKEFILE_LIST) VERSION REVISION
+
+# Include all generated .d files
+-include $(DEPS)
+
+$(OUTDIR)/%.o: %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(OUTDIR)/%.o: %.s
+	$(AS) $(ASFLAGS) -o $@ $<
+
+$(TARGET_DEBUG) : $(OBJS)
+	$(CC) $(LDFLAGS) $^ -o $@
+
+$(TARGET) : $(TARGET_DEBUG)
+	cp $< $@
+	$(STRIP) $@
+	$(SIZE) $@

@@ -1,0 +1,2 @@
+#!/bin/bash
+tee -a /Users/stephen/gdb.log | /opt/amiga/bin/m68k-amigaos-gdb $@
